@@ -76,7 +76,9 @@ class TMCServer(Thread):
         ):
         super(TMCServer, self).__init__()
         self.__serving = False
-        self.__addr = (str(host), port)
+        self.port = port
+        self.host = host
+        self.address = (str(host), port)
         self.__handler = handler
         self.__route_rules = {}
         self.daemon = True
@@ -127,10 +129,17 @@ class TMCServer(Thread):
         return decorator
 
     def run(self):
+        if not self.__route_rules:
+            raise AssertionError(
+                """
+                Invariant Violation: Server has no route handlers and
+                will return a 404 for every request.
+                """
+            )
         self.__serving = True
         with TMCHTTPServer(
                 self.__route_rules,
-                self.__addr,
+                self.address,
                 self.__handler
             ) as server:
             while self.__serving:
