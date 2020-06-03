@@ -37,11 +37,6 @@ class UnimplementedHTTPMethodError(Exception):
 
 
 class TMCRequestHandler(BaseHTTPRequestHandler):
-    def __init__(self, request, client_address, server):
-        print("CONSTRUCTOR CALL")
-        super(TMCRequestHandler, self).__init__(request, client_address, server)
-        print("POST INIT CALL")
-
     def do_GET(self):
         key = format_route_key(self.path, self.command)
         if key in self.server.route_rules:
@@ -141,12 +136,12 @@ class TMCServer(Thread):
 
     def run(self):
         if not self.__route_rules:
-            raise AssertionError(
+            self.__on_error(AssertionError(
                 """
                 Invariant Violation: Server has no route handlers and
                 will return a 404 for every request.
                 """
-            )
+            ))
         self.__serving = True
         with TMCHTTPServer(
                 self.__route_rules,
