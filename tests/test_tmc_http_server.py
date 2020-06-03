@@ -1,5 +1,6 @@
 import pytest
 import requests
+from unittest.mock import MagicMock
 from .context import tmc_server
 
 class TestBasicGet:
@@ -40,9 +41,15 @@ class TestBasicGet:
             def barfoo():
                 return "foobar!"
 
-    def test_throws_on_start_if_no_routes(self):
-        server = tmc_server.TMCServer()
-        with pytest.raises(AssertionError):
-            server.start()
+        server.stop()
 
+    def test_throws_on_start_if_no_routes(self):
+        on_error = MagicMock()
+
+        server = tmc_server.TMCServer(
+            on_error=on_error,
+        )
+
+        server.start()
+        assert(on_error.call_count == 1)
         server.stop()
