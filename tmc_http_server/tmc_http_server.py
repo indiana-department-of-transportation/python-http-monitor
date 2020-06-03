@@ -23,6 +23,11 @@ FOUR_OH_FOUR = """
 """
 
 
+def _default_error_handler(err: Exception):
+    print(err)
+    return err
+
+
 def format_route_key(route: str, method: str) -> str:
     return "{}, {}".format(route, method.upper())
 
@@ -73,15 +78,21 @@ class TMCServer(Thread):
             host: HOST = "0.0.0.0",
             port: int = 8080,
             handler=TMCRequestHandler,
+            on_error=_default_error_handler,
         ):
         super(TMCServer, self).__init__()
-        self.__serving = False
+        self.daemon = True  
+
+        # NOTE: Setting these public attributes has no effect once
+        # start is called.
         self.port = port
         self.host = host
         self.address = (str(host), port)
+
+        self.__serving = False
         self.__handler = handler
         self.__route_rules = {}
-        self.daemon = True
+        self.__on_error = on_error
 
     def add_url_handle(
             self,
@@ -143,7 +154,10 @@ class TMCServer(Thread):
                 self.__handler
             ) as server:
             while self.__serving:
-                server.handle_request()
+                try:
+                    server.handle_request()
+                except Exception as err:
+                    self.__on_error(err)
 
             print("\nServer exited.\n")
 
