@@ -59,7 +59,7 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
 class TMCHTTPServer(ThreadingHTTPServer):
     def __init__(
             self,
-            rules,
+            rules={},
             address=("0.0.0.0", 8080),
             handler=TMCRequestHandler
         ):
