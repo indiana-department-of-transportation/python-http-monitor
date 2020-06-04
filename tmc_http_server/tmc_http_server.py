@@ -246,7 +246,7 @@ class TMCServer(Thread):
 
     def stop(self):
         """Stops the HTTP server. Don't forget to call TMCServer::join
-            afterwards.
+            afterwards if waiting on the thread to finish is necessary.
         """
         self.__serving = False
         return self
