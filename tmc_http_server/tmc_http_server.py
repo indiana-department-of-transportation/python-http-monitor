@@ -4,7 +4,7 @@
     :synopsis: Defines a HTTP server designed for monitoring
         multithreaded Python3 applications. Not meant to e.g.
         define a RESTful API backend. The API is inspired by
-        the Flask API.
+        Flask.
 """
 import re
 from typing import Union, List, Dict, Tuple, Optional
@@ -70,27 +70,44 @@ class UnimplementedHTTPMethodError(Exception):
 class TMCRequestHandler(BaseHTTPRequestHandler):
     """Default request handler."""
 
+    def handle_unknown_route(self, key: str) -> bool:
+        """"""
+
+        known = key in self.server.route_rules
+        if not known:
+            self.send_response(404)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            self.wfile.write(FOUR_OH_FOUR.encode())
+
+        return known
+
+
     def do_GET(self):
         """Handles HTTP GET requests by calling the function
             associated with that route.
         """
 
         key = format_route_key(self.path, self.command)
-        if key in self.server.route_rules:
+        known = self.handle_unknown_route(key)
+        if known:
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
             result = self.server.route_rules[key]()
             self.wfile.write(str(result).encode())
 
-        else:
-            self.send_response(404)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-            self.wfile.write(FOUR_OH_FOUR.encode())
-
     def do_POST(self):
-        """TODO"""
+        """"""
+
+        key = format_route_key(self.path, self.command)
+        known = self.handle_unknown_route(key)
+        if known:
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            result = self.server.route_rules[key]()
+            self.wfile.write(str(result).encode())
 
 
 class TMCHTTPServer(ThreadingHTTPServer):
