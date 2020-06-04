@@ -7,6 +7,8 @@
         Flask.
 """
 import re
+import json
+import magic
 from typing import Union, List, Dict, Tuple, Optional
 from ipaddress import IPv4Address
 from threading import Thread
@@ -30,6 +32,11 @@ COMMA = r",\s*"
 FOUR_OH_FOUR = """
 <h1>HTTP 404</h1>
 <p>The requested resource was not found</p>
+"""
+
+FIVE_HUNDRED = """
+<h1>Internal Error 500:</h1>
+<p>An error occured processing your request.</p>
 """
 
 
@@ -81,7 +88,12 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(FOUR_OH_FOUR.encode())
 
         return known
-
+    
+    def handle_internal_error(self):
+        self.send_response(500)
+        self.send_header("Content-type", "text/html")
+        self.end_headers()
+        self.wfile.write(FIVE_HUNDRED.encode())
 
     def do_GET(self):
         """Handles HTTP GET requests by calling the function
@@ -91,11 +103,16 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
         key = format_route_key(self.path, self.command)
         known = self.handle_unknown_route(key)
         if known:
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            result = self.server.route_rules[key]()
-            self.wfile.write(str(result).encode())
+            try:
+                result = self.server.route_rules[key]()
+                mime_type = self.server.guess_mime_type(result)
+                self.send_response(200)
+                self.send_header("Content-type", mime_type)
+                self.end_headers()
+                self.wfile.write(str(result).encode())
+            except Exception as err:
+                self.server._on_error(err)
+                self.handle_internal_error()
 
     def do_POST(self):
         """"""
@@ -103,11 +120,16 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
         key = format_route_key(self.path, self.command)
         known = self.handle_unknown_route(key)
         if known:
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            result = self.server.route_rules[key]()
-            self.wfile.write(str(result).encode())
+            try:
+                result = self.server.route_rules[key]()
+                mime_type = self.server.guess_mime_type(result)
+                self.send_response(200)
+                self.send_header("Content-type", mime_type)
+                self.end_headers()
+                self.wfile.write(str(result).encode())
+            except Exception as err:
+                self.server._on_error(err)
+                self.handle_internal_error()
 
 
 class TMCHTTPServer(ThreadingHTTPServer):
@@ -165,6 +187,12 @@ class TMCServer(Thread):
         self.__handler = handler
         self.__route_rules = {}
         self.__on_error = on_error
+        self.__magic = magic.Magic(mime=True)
+    
+    def guess_mime_type(self, string: str) -> str:
+        """"""
+
+        return self.__magic.from_buffer(string)
 
     def add_url_handle(
             self,
