@@ -2,21 +2,26 @@
 .. py:module:: tmc_http_server
     :platform: *nix
     :synopsis: Defines a HTTP server designed for monitoring
-        multithreaded Python3 applications. Not meant to e.g.
-        define a RESTful API backend. The API is inspired by
-        Flask.
+        multithreaded Python3 applications. Altough we strive
+        to be production-grade for the intended use case, this
+        server is no meant to e.g. handle a RESTful API backend.
+        The API is inspired by Flask.
 """
 import re
 import json
-import magic
-from typing import Union, List, Dict, Tuple, Optional
+
+from typing import Union, Iterable, Dict, Tuple, Optional, Any
 from ipaddress import IPv4Address
 from threading import Thread
+from cgi import parse_multipart, parse_header
+from urllib.parse import urlparse, parse_qs
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+import magic
 
 # For those who don't like their data stringly-typed.
 HOST = Union[str, IPv4Address]
-VERBS = Union[str, List[str]]
+VERBS = Union[str, Iterable[str]]
 ADDRESS = Tuple[HOST, int]
 
 # We only implement POST because of possibly sensitive requests,
@@ -54,6 +59,75 @@ def _default_error_handler(err: Exception) -> Exception:
     return err
 
 
+def try_parse(value: Any):
+    """"""
+
+    if type(value) == type(""):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            if value == "True":
+                return True
+            
+            if value == "False":
+                return False
+            
+            if value == "None":
+                return None
+
+        return value
+    
+    else:
+        try:
+            return {key: try_parse(val) for key, val in value.items()}
+
+        except AttributeError:
+            return [try_parse(val) for val in value]
+
+        except TypeError:
+            return value
+
+
+def unpack(value: Any):
+    """If passed an iterable of exactly one element returns
+        that element otherwise returns the argument. Attempts
+        to recusively turn all JSON serialized values into
+        python data.
+
+        :param x: The putative iterable to unpack.
+        :returns: The single item in the iterable or the argument.
+    """
+
+    if type(value) != type(""):
+        try:
+            # Check if value is subscriptable.
+            first = value[0]
+
+            # Check if it only has the one element.
+            if len(value) == 1:
+                temp = try_parse(first)
+                print("TEMP {}/{}".format(temp, type(temp)))
+                return try_parse(first)
+            else:
+                return [try_parse(item) for item in value]
+
+        except TypeError:
+            pass
+
+    return try_parse(value)
+
+
+def unpack_query_params(params: Dict) -> Dict:
+    """This function is to change the behavior of parse_qs which
+        by default wraps single query params in a list.
+
+        :param params: The query string parameters to convert.
+        :returns: The converted parameters dictionary.
+    """
+
+    return {key: unpack(val) for key, val in params.items()}
+
+
 def format_route_key(route: str, method: str) -> str:
     """Formats an HTTP verb and the associated route into
         a dictionary key.
@@ -78,22 +152,34 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
     """Default request handler."""
 
     def handle_unknown_route(self, key: str) -> bool:
-        """"""
+        """Handles requests we don't have a registered route for."""
 
         known = key in self.server.route_rules
         if not known:
             self.send_response(404)
-            self.send_header("Content-type", "text/html")
+            self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(FOUR_OH_FOUR.encode())
 
         return known
-    
+
     def handle_internal_error(self):
+        """Returns a generic 500 response to the client."""
+
         self.send_response(500)
-        self.send_header("Content-type", "text/html")
+        self.send_header("Content-Type", "text/html")
         self.end_headers()
         self.wfile.write(FIVE_HUNDRED.encode())
+
+    def guess_mime_type(self, string: str) -> str:
+        """Attempts to guess the mime type of the result using
+            libmagic.
+    
+            :param string: The string to infer the mime type for.
+            :returns: Best guess as to the mime type.
+        """
+
+        return self.server.magic.from_buffer(string)
 
     def do_GET(self):
         """Handles HTTP GET requests by calling the function
@@ -104,52 +190,69 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
         known = self.handle_unknown_route(key)
         if known:
             try:
-                result = self.server.route_rules[key]()
-                mime_type = self.server.guess_mime_type(result)
+                query_params = unpack_query_params(
+                    parse_qs(urlparse(self.path).query)
+                )
+
+                result = self.server.route_rules[key](**query_params)
+                mime_type = self.guess_mime_type(result)
                 self.send_response(200)
-                self.send_header("Content-type", mime_type)
+                self.send_header("Content-Type", mime_type)
                 self.end_headers()
                 self.wfile.write(str(result).encode())
+
             except Exception as err:
-                self.server._on_error(err)
+                self.server.on_error(err)
                 self.handle_internal_error()
 
     def do_POST(self):
-        """"""
+        """Handles POST requests."""
 
         key = format_route_key(self.path, self.command)
         known = self.handle_unknown_route(key)
         if known:
             try:
-                result = self.server.route_rules[key]()
-                mime_type = self.server.guess_mime_type(result)
+                content_length = self.headers.get("Content-Length", 0)
+                content_type = self.headers.get("Content-Type")
+                print("CONTENT {} {}".format(content_type, content_length))
+
+                # Here we'll try to handle the body if it's there based
+                # on the content-type header if present. Currently we're
+                # only handling url-encoded form data, json data, and plain text
+                # because again, this is just a basic server for monitoring
+                # a Python application.
+                if "application/json" in content_type:
+                    body = self.rfile.read(int(content_length)).decode("utf-8")
+                    kwargs = json.loads(body) or {}
+                    result = self.server.route_rules[key](**kwargs)
+                
+                elif content_type == "application/x-www-form-urlencoded":
+                    body = self.rfile.read(int(content_length)).decode("utf-8")
+                    print(body)
+                    print(parse_qs(body))
+                    query_params = unpack_query_params(
+                        parse_qs(body)
+                    )
+
+                    print(query_params)
+
+                    result = self.server.route_rules[key](**query_params)
+
+                elif body:  # Assume it's a string and the handler will accept
+                    result = self.server.route_rules[key](body)
+
+                else:
+                    result = self.server.route_rules[key]()
+
+                mime_type = self.guess_mime_type(result)
                 self.send_response(200)
-                self.send_header("Content-type", mime_type)
+                self.send_header("Content-Type", mime_type)
                 self.end_headers()
                 self.wfile.write(str(result).encode())
+
             except Exception as err:
-                self.server._on_error(err)
+                self.server.on_error(err)
                 self.handle_internal_error()
-
-
-class TMCHTTPServer(ThreadingHTTPServer):
-    """This is the actual HTTP server that is in turn wrapped by TMCServer.
-
-        :param rules: The mapping of routes to response functions.
-        :param address: Tuple of (host, port).
-        :param handler: Request handler should be TMCRequestHandler or a
-            subclass of it.
-    """
-    def __init__(
-            self,
-            rules: Optional[Dict] = None,
-            address: ADDRESS = ("0.0.0.0", 8080),
-            handler=TMCRequestHandler
-        ):
-        """Initializer for TMCHTTPServer"""
-
-        super(TMCHTTPServer, self).__init__(address, handler)
-        self.route_rules = rules or {}
 
 
 class TMCServer(Thread):
@@ -165,13 +268,14 @@ class TMCServer(Thread):
             a separate thread, the caller can pass a callback
             here to receive errors that arise during requests.
     """
+
     def __init__(
-            self,
-            host: HOST = "0.0.0.0",
-            port: int = 8080,
-            handler=TMCRequestHandler,
-            on_error=_default_error_handler,
-        ):
+        self,
+        host: HOST = "0.0.0.0",
+        port: int = 8080,
+        handler=TMCRequestHandler,
+        on_error=_default_error_handler,
+    ):
         """Initializer for TMCHTTPServer"""
 
         super(TMCServer, self).__init__()
@@ -188,18 +292,13 @@ class TMCServer(Thread):
         self.__route_rules = {}
         self.__on_error = on_error
         self.__magic = magic.Magic(mime=True)
-    
-    def guess_mime_type(self, string: str) -> str:
-        """"""
-
-        return self.__magic.from_buffer(string)
 
     def add_url_handle(
-            self,
-            route,
-            handler,
-            methods: VERBS = "GET",
-        ):
+        self,
+        route,
+        handler,
+        methods: VERBS = "GET",
+    ):
         """Registers the handler for the given route and HTTP
             verb. Although it can be called directly, it is likely
             more convenient to use the route decorator.
@@ -277,10 +376,12 @@ class TMCServer(Thread):
             ))
         self.__serving = True
         with TMCHTTPServer(
-                self.__route_rules,
-                self.address,
-                self.__handler
-            ) as server:
+            self.__route_rules,
+            self.__magic,
+            self.address,
+            self.__handler,
+            self.__on_error,
+        ) as server:
             while self.__serving:
                 try:
                     server.handle_request()
@@ -295,3 +396,34 @@ class TMCServer(Thread):
         """
         self.__serving = False
         return self
+
+
+class TMCHTTPServer(ThreadingHTTPServer):
+    """This is the actual HTTP server that is in turn wrapped by TMCServer.
+        :param rules: The route rules registered with the parent server.
+        :param magic_instance: The magic instance to check mime types against.
+        :param address: Address tuple, defaults to quad zeros and port 8080.
+        :param handler: The request handler, defaults to
+            TMCRequestHandler.
+        :param on_error: Because the actual HTTP server runs in
+            a separate thread, the caller can pass a callback
+            here to receive errors that arise during requests.    
+    """
+
+    def __init__(
+        self,
+        rules,
+        magic_instance,
+        address: ADDRESS = ("0.0.0.0", 8080),
+        handler=TMCRequestHandler,
+        on_error=_default_error_handler,
+    ):
+        """Initializer for TMCHTTPServer"""
+
+        super(TMCHTTPServer, self).__init__(address, handler)
+
+        # These instance attributes are mostly here for the benefit of
+        # the handler.
+        self.magic = magic_instance
+        self.route_rules = rules
+        self.on_error = on_error
