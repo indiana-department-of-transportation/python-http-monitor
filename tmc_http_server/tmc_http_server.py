@@ -186,7 +186,8 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
             associated with that route.
         """
 
-        key = format_route_key(self.path, self.command)
+        path = self.path.split("?")[0]
+        key = format_route_key(path, self.command)
         known = self.handle_unknown_route(key)
         if known:
             try:
