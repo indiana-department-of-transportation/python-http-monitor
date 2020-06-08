@@ -10,7 +10,7 @@
 import re
 import json
 
-from typing import Union, Iterable, Dict, Tuple, Any
+from typing import Union, Iterable, Tuple, Any
 from ipaddress import IPv4Address
 from threading import Thread
 from urllib.parse import urlparse, parse_qs
@@ -26,7 +26,7 @@ ADDRESS = Tuple[HOST, int]
 # We only implement POST because of possibly sensitive requests,
 # but again this server is intended for adding HTTP monitoring
 # to multi-threaded python applications, not as a production HTTP
-# web app server.
+# web app server, so no PUT, DELETE, etc.
 HTTP_METHODS = (
     'GET',
     'POST',
@@ -115,7 +115,7 @@ def unpack(value: Any):
                 return try_parse(first)
 
             return [unpack(item) for item in value]
-        
+
         except KeyError:
             if value and value.items:  # Assume dict if non-empty
                 return {key: unpack(val) for key, val in value.items()}
@@ -177,6 +177,9 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
             :returns: Best guess as to the mime type.
         """
 
+        # Yeah, yeah, Law of Demeter and whatnot. Singleton
+        # reference that is immutable by convention, not going
+        # to bother with a pass-thru method.
         return self.server.magic.from_buffer(string)
 
     def do_GET(self):
@@ -225,7 +228,7 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
                     kwargs = json.loads(body) or {}
                     result = self.server.route_rules[key](**kwargs)
 
-                elif content_type == "application/x-www-form-urlencoded":
+                elif "application/x-www-form-urlencoded" in content_type:
                     body = self.rfile.read(int(content_length)).decode("utf-8")
                     print(body)
                     print(parse_qs(body))
@@ -281,7 +284,7 @@ class TMCServer(Thread):
         self.daemon = True
 
         # NOTE: Setting these public attributes has no effect once
-        # start is called.
+        # start is called, intended for read-only reference.
         self.port = port
         self.host = host
         self.address = (str(host), port)
