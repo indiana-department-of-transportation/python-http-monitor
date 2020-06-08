@@ -5,6 +5,73 @@ from unittest.mock import MagicMock
 from .context import tmc_server
 
 
+class TestTryParse:
+    def test_try_parse_string(self):
+        foo = tmc_server.try_parse("foo")
+        assert foo == "foo"
+    
+    def test_try_parse_bools(self):
+        tr = tmc_server.try_parse("true")
+        assert tr == True
+
+        also_tr = tmc_server.try_parse("True")
+        assert also_tr == True
+
+        flse = tmc_server.try_parse("false")
+        assert flse == False
+
+        also_flse = tmc_server.try_parse("False")
+        assert also_flse == False
+
+    def test_try_parse_nulls(self):
+        null = tmc_server.try_parse("null")
+        assert null is None
+
+        also_null = tmc_server.try_parse("None")
+        assert also_null is None
+    
+    def test_try_parse_numbers(self):
+        three = tmc_server.try_parse("3")
+        assert three == 3
+
+        oh_point_five = tmc_server.try_parse("-0.5")
+        assert oh_point_five == -0.5
+
+        zero = tmc_server.try_parse("0")
+        assert zero == 0
+
+    def test_try_parse_hash(self):
+        foo = tmc_server.try_parse("{\"bar\": 7, \"baz\": true, \"qux\": null}")
+        assert foo["bar"] == 7
+        assert foo["baz"] == True
+        assert foo["qux"] is None
+
+    def test_try_parse_list(self):
+        foo = tmc_server.try_parse("[\"bar\", 3, true, null]")
+        assert foo[0] == "bar"
+        assert foo[1] == 3
+        assert foo[2] == True
+        assert foo[3] is None
+
+
+class TestUnpack:
+    def test_basic_unpack(self):
+        foo = tmc_server.unpack(["3"])
+        assert foo == 3
+
+    def test_complex_unpack(self):
+        foo = tmc_server.unpack({"foo": ["bar", "True", "false", "null", "3"]})
+        assert foo["foo"][0] == "bar"
+        assert foo["foo"][1] == True
+        assert foo["foo"][2] == False
+        assert foo["foo"][3] is None
+        assert foo["foo"][4] == 3
+    
+    def test_defer_to_try_parse(self):
+        foo = tmc_server.unpack("{\"bar\": 7}")
+        assert foo["bar"] == 7
+
+
 class TestServer:
     def test_throws_on_duplicate_route(self):
         server = tmc_server.TMCServer()

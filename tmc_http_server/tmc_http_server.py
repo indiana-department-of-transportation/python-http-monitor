@@ -10,10 +10,9 @@
 import re
 import json
 
-from typing import Union, Iterable, Dict, Tuple, Optional, Any
+from typing import Union, Iterable, Dict, Tuple, Any
 from ipaddress import IPv4Address
 from threading import Thread
-from cgi import parse_multipart, parse_header
 from urllib.parse import urlparse, parse_qs
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
@@ -60,32 +59,38 @@ def _default_error_handler(err: Exception) -> Exception:
 
 
 def try_parse(value: Any):
-    """"""
+    """Attempts to turn a string value into it's Python data
+        representation via json.loads. Has special handling
+        for strings 'True', 'False', and 'None'.
 
-    if type(value) == type(""):
+        :param value: The value. If a string, attempts to parse as
+            JSON, if not or on parse error returns the value itself.
+        :returns: The value.
+    """
+
+    if isinstance(value, str):
         try:
             return json.loads(value)
         except json.JSONDecodeError:
             if value == "True":
                 return True
-            
+
             if value == "False":
                 return False
-            
+
             if value == "None":
                 return None
 
         return value
-    
-    else:
-        try:
-            return {key: try_parse(val) for key, val in value.items()}
 
-        except AttributeError:
-            return [try_parse(val) for val in value]
+    try:
+        return {key: try_parse(val) for key, val in value.items()}
 
-        except TypeError:
-            return value
+    except AttributeError:
+        return [try_parse(val) for val in value]
+
+    except TypeError:
+        return value
 
 
 def unpack(value: Any):
@@ -98,7 +103,7 @@ def unpack(value: Any):
         :returns: The single item in the iterable or the argument.
     """
 
-    if type(value) != type(""):
+    if not isinstance(value, str):
         try:
             # Check if value is subscriptable.
             first = value[0]
@@ -108,24 +113,17 @@ def unpack(value: Any):
                 temp = try_parse(first)
                 print("TEMP {}/{}".format(temp, type(temp)))
                 return try_parse(first)
-            else:
-                return [try_parse(item) for item in value]
 
-        except TypeError:
+            return [unpack(item) for item in value]
+        
+        except KeyError:
+            if value and value.items:  # Assume dict if non-empty
+                return {key: unpack(val) for key, val in value.items()}
+
+        except (TypeError, AttributeError):
             pass
 
     return try_parse(value)
-
-
-def unpack_query_params(params: Dict) -> Dict:
-    """This function is to change the behavior of parse_qs which
-        by default wraps single query params in a list.
-
-        :param params: The query string parameters to convert.
-        :returns: The converted parameters dictionary.
-    """
-
-    return {key: unpack(val) for key, val in params.items()}
 
 
 def format_route_key(route: str, method: str) -> str:
@@ -174,7 +172,7 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
     def guess_mime_type(self, string: str) -> str:
         """Attempts to guess the mime type of the result using
             libmagic.
-    
+
             :param string: The string to infer the mime type for.
             :returns: Best guess as to the mime type.
         """
@@ -191,7 +189,7 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
         known = self.handle_unknown_route(key)
         if known:
             try:
-                query_params = unpack_query_params(
+                query_params = unpack(
                     parse_qs(urlparse(self.path).query)
                 )
 
@@ -226,12 +224,12 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
                     body = self.rfile.read(int(content_length)).decode("utf-8")
                     kwargs = json.loads(body) or {}
                     result = self.server.route_rules[key](**kwargs)
-                
+
                 elif content_type == "application/x-www-form-urlencoded":
                     body = self.rfile.read(int(content_length)).decode("utf-8")
                     print(body)
                     print(parse_qs(body))
-                    query_params = unpack_query_params(
+                    query_params = unpack(
                         parse_qs(body)
                     )
 
@@ -271,12 +269,12 @@ class TMCServer(Thread):
     """
 
     def __init__(
-        self,
-        host: HOST = "0.0.0.0",
-        port: int = 8080,
-        handler=TMCRequestHandler,
-        on_error=_default_error_handler,
-    ):
+            self,
+            host: HOST = "0.0.0.0",
+            port: int = 8080,
+            handler=TMCRequestHandler,
+            on_error=_default_error_handler,
+        ):
         """Initializer for TMCHTTPServer"""
 
         super(TMCServer, self).__init__()
@@ -295,11 +293,11 @@ class TMCServer(Thread):
         self.__magic = magic.Magic(mime=True)
 
     def add_url_handle(
-        self,
-        route,
-        handler,
-        methods: VERBS = "GET",
-    ):
+            self,
+            route,
+            handler,
+            methods: VERBS = "GET",
+        ):
         """Registers the handler for the given route and HTTP
             verb. Although it can be called directly, it is likely
             more convenient to use the route decorator.
@@ -377,12 +375,12 @@ class TMCServer(Thread):
             ))
         self.__serving = True
         with TMCHTTPServer(
-            self.__route_rules,
-            self.__magic,
-            self.address,
-            self.__handler,
-            self.__on_error,
-        ) as server:
+                self.__route_rules,
+                self.__magic,
+                self.address,
+                self.__handler,
+                self.__on_error,
+            ) as server:
             while self.__serving:
                 try:
                     server.handle_request()
@@ -408,17 +406,17 @@ class TMCHTTPServer(ThreadingHTTPServer):
             TMCRequestHandler.
         :param on_error: Because the actual HTTP server runs in
             a separate thread, the caller can pass a callback
-            here to receive errors that arise during requests.    
+            here to receive errors that arise during requests.
     """
 
     def __init__(
-        self,
-        rules,
-        magic_instance,
-        address: ADDRESS = ("0.0.0.0", 8080),
-        handler=TMCRequestHandler,
-        on_error=_default_error_handler,
-    ):
+            self,
+            rules,
+            magic_instance,
+            address: ADDRESS = ("0.0.0.0", 8080),
+            handler=TMCRequestHandler,
+            on_error=_default_error_handler,
+        ):
         """Initializer for TMCHTTPServer"""
 
         super(TMCHTTPServer, self).__init__(address, handler)
