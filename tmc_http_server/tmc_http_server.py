@@ -402,6 +402,7 @@ class TMCServer(Thread):
 
 class TMCHTTPServer(ThreadingHTTPServer):
     """This is the actual HTTP server that is in turn wrapped by TMCServer.
+
         :param rules: The route rules registered with the parent server.
         :param magic_instance: The magic instance to check mime types against.
         :param address: Address tuple, defaults to quad zeros and port 8080.
