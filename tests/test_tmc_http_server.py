@@ -1,7 +1,10 @@
 import pytest
 import json
-import requests
 from unittest.mock import MagicMock
+
+import requests
+from requests.auth import HTTPBasicAuth
+
 from .context import tmc_server
 
 
@@ -262,3 +265,48 @@ class TestBasicPost:
         server.stop()
         server.join(0.5)
         assert(req.status_code == 404)
+
+
+class TestAuth:
+    def test_basic_auth(self):
+        server = tmc_server.TMCServer(port=8087)
+
+        authorize = MagicMock()
+
+        @server.route("/foobar", authorize=authorize)
+        def foobar():
+            return "foobar!"
+
+        server.start()
+        req = requests.get("http://{}:{}/foobar".format(
+            server.host,  # default host, should be quad zeros
+            server.port,  # default port, should be 8080
+        ), auth=HTTPBasicAuth("foo", "bar"))
+
+        server.stop()
+        server.join(0.5)
+        authorize.assert_called_once_with(
+            "foo",
+            "bar",
+        )
+    
+    def test_503(self):
+        server = tmc_server.TMCServer(port=8088)
+
+        def authorize(*args, **kwargs):
+            return False
+
+        @server.route("/foobar", authorize=authorize)
+        def foobar():
+            return "foobar!"
+
+        server.start()
+
+        req = requests.get("http://{}:{}/foobar".format(
+            server.host,  # default host, should be quad zeros
+            server.port,  # default port, should be 8080
+        ))
+
+        server.stop()
+        server.join(0.5)
+        assert(req.status_code == 503)
