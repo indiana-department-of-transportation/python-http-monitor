@@ -173,17 +173,13 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(FIVE_OH_THREE.encode())
 
-    def handle_unknown_route(self, key: str) -> bool:
+    def handle_unknown_route(self):
         """Handles requests we don't have a registered route for."""
 
-        known = key in self.server.route_rules
-        if not known:
-            self.send_response(404)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(FOUR_OH_FOUR.encode())
-
-        return known
+        self.send_response(404)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(FOUR_OH_FOUR.encode())
 
     def handle_internal_error(self):
         """Returns a generic 500 response to the client."""
@@ -221,7 +217,7 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
 
         return auth
     
-    def is_route_known(self, string: route):
+    def is_known_route(self, string: str) -> bool:
         """"""
 
         known = string in self.server.route_rules
@@ -237,7 +233,7 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
 
         path = self.path.split("?")[0]
         key = format_route_key(path, self.command)
-        known = self.handle_unknown_route(key)
+        known = self.is_known_route(key)
         if known:
             route = self.server.route_rules[key]
             authed = self.authorize(
@@ -266,7 +262,7 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
         """Handles POST requests."""
 
         key = format_route_key(self.path, self.command)
-        known = self.handle_unknown_route(key)
+        known = self.is_known_route(key)
         if known:
             route = self.server.route_rules[key]
             authed = self.authorize(
