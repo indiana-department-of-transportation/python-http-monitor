@@ -220,6 +220,15 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
             self.handle_unauthorized_request()
 
         return auth
+    
+    def is_route_known(self, string: route):
+        """"""
+
+        known = string in self.server.route_rules
+        if not known:
+            self.handle_unknown_route()
+        
+        return known
 
     def do_GET(self):
         """Handles HTTP GET requests by calling the function
