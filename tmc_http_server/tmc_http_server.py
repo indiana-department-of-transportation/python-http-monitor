@@ -11,12 +11,14 @@ import re
 import json
 
 from typing import Union, Iterable, Tuple, Any
+from collections import namedtuple
 from ipaddress import IPv4Address
 from threading import Thread
 from urllib.parse import urlparse, parse_qs
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 import magic
+from http_basic_auth import parse_header, BasicAuthException
 
 # For those who don't like their data stringly-typed.
 HOST = Union[str, IPv4Address]
@@ -43,6 +45,12 @@ FIVE_HUNDRED = """
 <p>An error occured processing your request.</p>
 """
 
+FIVE_OH_THREE = """
+<h1>503: Forbidden</h1>
+<p>The request did not contain the proper credentials
+to access this resource</p>
+"""
+
 
 def _default_error_handler(err: Exception) -> Exception:
     """Since the server runs in its own thread context, it
@@ -56,6 +64,10 @@ def _default_error_handler(err: Exception) -> Exception:
     """
     print(err)
     return err
+
+
+def yes(*args, **kwargs):
+    return True
 
 
 def try_parse(value: Any):
@@ -146,8 +158,20 @@ class UnimplementedHTTPMethodError(Exception):
     """
 
 
+TMCKnownRoute = namedtuple('TMCKnownRoute', [
+    'handle',
+    'authenticate',
+])
+
+
 class TMCRequestHandler(BaseHTTPRequestHandler):
     """Default request handler."""
+
+    def handle_unauthorized_request(self):
+        self.send_response(503)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(FIVE_OH_THREE.encode())
 
     def handle_unknown_route(self, key: str) -> bool:
         """Handles requests we don't have a registered route for."""
@@ -181,6 +205,21 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
         # reference that is immutable by convention, not going
         # to bother with a pass-thru method.
         return self.server.magic.from_buffer(string)
+    
+    def authorize(self, auth_header, auth_fn) -> bool:
+        """"""
+
+        try:
+            username, password = parse_header(auth_header)
+        
+        except BasicAuthException:
+            username, password = "", ""
+        
+        auth = auth_fn(username, password)
+        if not auth:
+            self.handle_unauthorized_request()
+
+        return auth
 
     def do_GET(self):
         """Handles HTTP GET requests by calling the function
@@ -191,21 +230,28 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
         key = format_route_key(path, self.command)
         known = self.handle_unknown_route(key)
         if known:
-            try:
-                query_params = unpack(
-                    parse_qs(urlparse(self.path).query)
-                )
+            route = self.server.route_rules[key]
+            authed = self.authorize(
+                self.headers.get("Authorization"),
+                route.authenticate,
+            )
 
-                result = self.server.route_rules[key](**query_params)
-                mime_type = self.guess_mime_type(result)
-                self.send_response(200)
-                self.send_header("Content-Type", mime_type)
-                self.end_headers()
-                self.wfile.write(str(result).encode())
+            if authed:
+                try:
+                    query_params = unpack(
+                        parse_qs(urlparse(self.path).query)
+                    )
 
-            except Exception as err:
-                self.server.on_error(err)
-                self.handle_internal_error()
+                    result = route.handle(**query_params)
+                    mime_type = self.guess_mime_type(result)
+                    self.send_response(200)
+                    self.send_header("Content-Type", mime_type)
+                    self.end_headers()
+                    self.wfile.write(str(result).encode())
+
+                except Exception as err:
+                    self.server.on_error(err)
+                    self.handle_internal_error()
 
     def do_POST(self):
         """Handles POST requests."""
@@ -213,48 +259,55 @@ class TMCRequestHandler(BaseHTTPRequestHandler):
         key = format_route_key(self.path, self.command)
         known = self.handle_unknown_route(key)
         if known:
-            try:
-                content_length = self.headers.get("Content-Length", 0)
-                content_type = self.headers.get("Content-Type")
-                print("CONTENT {} {}".format(content_type, content_length))
+            route = self.server.route_rules[key]
+            authed = self.authorize(
+                self.headers.get("Authorization"),
+                route.authenticate,
+            )
 
-                # Here we'll try to handle the body if it's there based
-                # on the content-type header if present. Currently we're
-                # only handling url-encoded form data, json data, and plain text
-                # because again, this is just a basic server for monitoring
-                # a Python application.
-                if "application/json" in content_type:
-                    body = self.rfile.read(int(content_length)).decode("utf-8")
-                    kwargs = json.loads(body) or {}
-                    result = self.server.route_rules[key](**kwargs)
+            if authed:
+                try:
+                    content_length = self.headers.get("Content-Length", 0)
+                    content_type = self.headers.get("Content-Type")
+                    print("CONTENT {} {}".format(content_type, content_length))
 
-                elif "application/x-www-form-urlencoded" in content_type:
-                    body = self.rfile.read(int(content_length)).decode("utf-8")
-                    print(body)
-                    print(parse_qs(body))
-                    query_params = unpack(
-                        parse_qs(body)
-                    )
+                    # Here we'll try to handle the body if it's there based
+                    # on the content-type header if present. Currently we're
+                    # only handling url-encoded form data, json data, and plain text
+                    # because again, this is just a basic server for monitoring
+                    # a Python application.
+                    if "application/json" in content_type:
+                        body = self.rfile.read(int(content_length)).decode("utf-8")
+                        kwargs = json.loads(body) or {}
+                        result = route.handle(**kwargs)
 
-                    print(query_params)
+                    elif "application/x-www-form-urlencoded" in content_type:
+                        body = self.rfile.read(int(content_length)).decode("utf-8")
+                        print(body)
+                        print(parse_qs(body))
+                        query_params = unpack(
+                            parse_qs(body)
+                        )
 
-                    result = self.server.route_rules[key](**query_params)
+                        print(query_params)
 
-                elif body:  # Assume it's a string and the handler will accept
-                    result = self.server.route_rules[key](body)
+                        result = route.handle(**query_params)
 
-                else:
-                    result = self.server.route_rules[key]()
+                    elif body:  # Assume it's a string and the handler will accept
+                        result = route.handle(body)
 
-                mime_type = self.guess_mime_type(result)
-                self.send_response(200)
-                self.send_header("Content-Type", mime_type)
-                self.end_headers()
-                self.wfile.write(str(result).encode())
+                    else:
+                        result = route.handle()
 
-            except Exception as err:
-                self.server.on_error(err)
-                self.handle_internal_error()
+                    mime_type = self.guess_mime_type(result)
+                    self.send_response(200)
+                    self.send_header("Content-Type", mime_type)
+                    self.end_headers()
+                    self.wfile.write(str(result).encode())
+
+                except Exception as err:
+                    self.server.on_error(err)
+                    self.handle_internal_error()
 
 
 class TMCServer(Thread):
@@ -299,6 +352,7 @@ class TMCServer(Thread):
             self,
             route,
             handler,
+            authorize=yes,
             methods: VERBS = "GET",
         ):
         """Registers the handler for the given route and HTTP
@@ -307,6 +361,8 @@ class TMCServer(Thread):
 
             :param route: The URL to register.
             :param handler: The handler function for that route.
+            :param authorize: Authorization function, given the username
+                and password from the Authorization header.
             :param methods: The HTTP verbs that the route is valid for.
             :returns: self.
         """
@@ -340,7 +396,7 @@ class TMCServer(Thread):
                     """.format(route, method.upper())
                 )
 
-            self.__route_rules[key] = handler
+            self.__route_rules[key] = TMCKnownRoute(handler, authorize)
 
         return self
 
